@@ -44,9 +44,6 @@ def load_counts(excel_file: Path):
     """Load expected and actual counts for each state."""
     expected_counts = get_expected_counts()
     actual_counts = count_records()
-
-    print("Expected Counts:", expected_counts)
-    print("Actual Counts:", actual_counts)
     
     if expected_counts.empty or actual_counts.empty:
         st.error("Unable to load counts data.")
