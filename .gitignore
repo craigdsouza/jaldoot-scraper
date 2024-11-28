@@ -1,0 +1,11 @@
+/chromedriver-win32_126
+/chromedriver-win32_126.zip
+/chromedriver.exe
+/chromedriver_win32.zip
+/correct_fn.py
+aiscraper
+.env
+*.pyc
+*.zip
+*.exe
+scraper/jaldoot/logs/jaldoot.log
