@@ -71,6 +71,7 @@ def initialize_driver():
         options.add_argument("--disable-gpu")
         options.add_argument("--no-sandbox")
     try:
+        logger.info("Initializing headless Chrome driver at path: %s", str(CHROME_DRIVER_PATH))
         service = Service(str(CHROME_DRIVER_PATH))
         driver = webdriver.Chrome(service=service, options=options)
         logger.info("Headless Chrome driver initialized successfully.")
