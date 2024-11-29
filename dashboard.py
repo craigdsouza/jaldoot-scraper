@@ -4,7 +4,7 @@ import streamlit as st
 import json
 from pathlib import Path
 import time
-from config.settings import STATUS_FILE, EXCEL_FILE
+from config.settings import STATUS_FILE, EXCEL_FILE, LOG_FILE  # Import LOG_FILE
 from modules.utils import count_records, get_expected_counts
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -128,6 +128,38 @@ def main():
         plot_counts(counts_df)
     else:
         st.warning("Counts data is unavailable.")
+    
+    st.markdown("---")  # Separator for the log file download section
+
+    st.header("📥 Download Logs")
+
+    if LOG_FILE.exists():
+        with open(LOG_FILE, "rb") as log_file:
+            log_data = log_file.read()
+        st.download_button(
+            label="Download Latest Log File",
+            data=log_data,
+            file_name="jaldoot.log",
+            mime="text/plain"
+        )
+    else:
+        st.warning("Log file not found.")
+
+    st.markdown("---")  # Separator for the data download section
+
+    st.header("📥 Download Data")
+
+    if EXCEL_FILE.exists():
+        with open(EXCEL_FILE, "rb") as excel_file:
+            excel_data = excel_file.read()
+        st.download_button(
+            label="Download Latest Data File",
+            data=excel_data,
+            file_name="jaldoot-remote.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.warning("Data file not found.")
 
 if __name__ == "__main__":
     main()
