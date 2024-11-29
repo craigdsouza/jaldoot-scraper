@@ -9,3 +9,4 @@ aiscraper
 *.zip
 *.exe
 scraper/jaldoot/logs/jaldoot.log
+data/jaldoot.xlsx
