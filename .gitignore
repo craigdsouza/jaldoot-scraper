@@ -8,5 +8,5 @@ aiscraper
 *.pyc
 *.zip
 *.exe
-scraper/jaldoot/logs/jaldoot.log
-data/jaldoot.xlsx
+logs
+data
