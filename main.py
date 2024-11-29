@@ -241,7 +241,7 @@ def main():
                          len(unique_missing_block_pairs))
 
             # loop through first two rows of unique_missing_block_pairs
-            for index, row in unique_missing_block_pairs[0:1].iterrows():
+            for index, row in unique_missing_block_pairs.iterrows():
                 state = row['States/UT\'s']
                 district = row['District']
                 logger.info("--------------------------------------------------")
