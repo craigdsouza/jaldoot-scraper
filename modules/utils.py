@@ -11,6 +11,14 @@ import time
 import json
 from datetime import datetime
 import logging
+from sqlalchemy import create_engine
+from config.settings import DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+
+DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+engine = create_engine(DATABASE_URL)
+Base = declarative_base()
 
 def update_status(status, message=""):
     """Update the scraper status in status.json located at the root directory."""
@@ -98,6 +106,13 @@ def sheet_empty(file_path: Path, sheet_name: str) -> bool:
     logger.info(f"Sheet '{sheet_name}' empty: {is_empty}")
     return is_empty
 
+def postgres_table_empty(states_table) -> bool:
+    """
+    Check if postgres states table is empty
+    """
+   
+
+
 def create_excel_file(file_path: Path, sheets: list):
     """
     Create an Excel file with specified sheet names if it doesn't exist.
@@ -171,3 +186,16 @@ def get_expected_counts() -> pd.DataFrame:
     except Exception as e:
         logger.error(f"Error retrieving expected counts: {e}")
         return pd.DataFrame()
+    
+def get_db_connection():
+    return engine.connect()
+
+def get_db_session():
+    DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    engine = create_engine(DATABASE_URL)
+    
+    # Create tables if they don't exist
+    Base.metadata.create_all(engine)
+    
+    Session = sessionmaker(bind=engine)
+    return Session()

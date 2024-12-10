@@ -15,6 +15,9 @@ This can be found [https://googlechromelabs.github.io/chrome-for-testing/](https
 Make sure to check your version of Chrome and find the compatible driver, pick the Stable one if you're unsure.
 Download, unzip and save the exe to your project root folder.
 
+## Postgresql
+
+
 ## Run main.py
 Use the command python main.py
 
