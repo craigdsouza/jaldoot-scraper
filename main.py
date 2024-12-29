@@ -29,6 +29,13 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
+
+# Log PostgreSQL errors
+@event.listens_for(Engine, "handle_error")
+def receive_handle_error(exception_context):
+    logger.error(f"PostgreSQL error: {exception_context.original_exception}")
 
 def main():
     update_status("Running")
@@ -37,292 +44,265 @@ def main():
     scraper = Scraper(driver, BASE_URL)
 
     session = get_db_session()
+    engine  = session.get_bind()
 
     try:
-        # Create Database and tables if it doesn't exist
-        #---------------------------------------------------------------------#
-        # if not EXCEL_FILE.exists():
-        #     create_excel_file(EXCEL_FILE, SHEET_NAMES)
-        # else:
-        #     # Ensure all required sheets exist; create missing ones
-        #     verify_excel_file(EXCEL_FILE, SHEET_NAMES)
-
         start_time = begin_scraping_log()
 
         ##### Scrape the STATE table #####
+        # Get count of all states in the State table
         try:
             states = session.query(State)   # <class 'sqlalchemy.orm.query.Query'>
+            logger.info(f"States table queried successfully, count of states: {states.count()}")
         except Exception as e:
             logger.error(f"Error querying states: {e}")
 
+        # to-test - delete the states table from the postgres db and check if it gets added back
         if states.count() == 0:
             try:
                 logger.info("Scraping state table...")
                 state_table = scraper.get_states()
             except RetryError as re:
-                logger.error("Retry attempts failed for get_states: %s", re)
+                logger.error(f"Retry attempts failed for get_states: {re}")
                 state_table = pd.DataFrame()  # Assign empty DataFrame
             except Exception as e:
-                logger.error("Unexpected error during get_states: %s", e)
+                logger.error(f"Unexpected error during get_states: {e}")
                 state_table = pd.DataFrame()
             
-            # Save state_table to Excel if not empty
+            # If state_table has data, save it to postgres table
             if not state_table.empty:
                 try:
-                    # logger.info("Saving state table to Excel...")
-                    logger.info("Saving state table to postgres table")
-                    # with pd.ExcelWriter(EXCEL_FILE, mode='a', if_sheet_exists='replace', engine='openpyxl') as writer:
-                        # state_table.to_excel(writer, sheet_name=SHEET_NAMES[0], index=False)
-                    #---------------------------------------------------------------------#
-                    logger.info("State table saved successfully.")
+                    logger.info("Saving state table (pandas df) to postgres table")
+                    state_table.to_sql("states", engine, if_exists='replace', index=False)
+                    session.commit()
+                    logger.info("State table saved to postgres successfully.")
                 except Exception as e:
-                    logger.error("Error saving state table to Excel: %s", e)
+                    logger.error(f"Error saving state table to postgres : {e}")
             else:
                 logger.warning("State table is empty. Skipping saving.")
         else:
-            logger.info("states postgres table exists and isn't empty. Loading states table from Excel...")
-            try:
-                #---------------------------------------------------------------------#
-                # state_table = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAMES[0])
-                logger.info("Loaded %d states from postgres table", states.count())
-            except Exception as e:
-                logger.error("Error loading state table from database: %s", e)
-                #---------------------------------------------------------------------#
-                pass
-                # state_table = pd.DataFrame()
+            logger.info("states postgres table exists and isn't empty. Loading states table from postgres...")
+            logger.info(f"States table queried successfully, count of states: {states.count()}")
         
         ##### Scrape the DISTRICT tables #####
+        # Get count of all districts in the District table
         try:
             all_districts = session.query(District)   # <class 'sqlalchemy.orm.query.Query'>
+            starting_length_districts = all_districts.count()
+            logger.info(f"Districts table queried successfully, count of districts: {starting_length_districts}")
         except Exception as e:
             logger.error(f"Error querying districts: {e}")
 
-        # all_districts = pd.ExcelFile(EXCEL_FILE).parse(SHEET_NAMES[1])
-        starting_length_districts = all_districts.count()
-        logger.info("starting_length_districts: ",starting_length_districts)
-
-        # If missing states-district pairs are found, scrape
+        # Get list of available states in the District table
         try:
-            # available_states = all_districts["States/UT\'s"].unique()
-            available_states = session.query(District.__table__.c["States/UT's"]).distinct().all()
-            available_states = [state[0] for state in available_states]
-            logger.info("available distinct states are: ", available_states)
+            available_states = session.query(District.__table__.c["States/UT's"]).distinct().all() # <class 'sqlalchemy.orm.query.Query'>
+            logger.info(f"available_states type:{type(available_states)} ")  # <class 'list'>
+            available_states = [state[0] for state in available_states] # Convert to clean list
+            logger.info(f"available distinct states are:{available_states}")
         except Exception as e:
             logger.error("Error getting unique states from all_districts: %s", e)
             available_states = []
-        logger.info("Loaded %d districts from %d states in Excel.", starting_length_districts, len(available_states))
+        logger.info(f"Loaded {starting_length_districts} districts from {len(available_states)} states in postgres.")
         
         # Find missing states by querying the State table
         try:
-            missing_states = session.query(State).filter(~State.__table__.c["States/UT's"].in_(available_states)).all()
-            logger.info("Found %d missing states.", len(missing_states))
+            missing_states = session.query(State).filter(~State.__table__.c["States/UT's"].in_(available_states)).all() # <class 'sqlalchemy.orm.query.Query'>
+            logger.info(f"no of missing states: {len(missing_states)}")
+            # logger.info(f"missing_states are: {missing_states}")
+            # logger.info(f"missing_states[0] type: {type(missing_states[0])}") # <class 'models.State'>
+            # logger.info(f"missing_states[0] dir: {dir(missing_states[0])}") # ['No. of Panchayat Covered', .., "States/UT's", .., ..]
         except Exception as e:
             logger.error("Error finding missing states: %s", e)
             missing_states = []
         
-        # missing_states = state_table[~state_table["States/UT\'s"].isin(available_states)]
-        # logger.info("Found %d missing states.", len(missing_states))
-
-        if not missing_states.empty:
+        if len(missing_states)>0:
             try:
                 logger.info("Scraping district tables for missing states...")
-                state_list = list(zip(missing_states["States/UT\'s"], missing_states['URL']))
+                state_list = []
+
+                missing_states_names = [getattr(state, "States/UT's") for state in missing_states]
+                missing_states_urls = [getattr(state, "URL") for state in missing_states]        
+                state_list = list(zip(missing_states_names, missing_states_urls))
                 
                 for state, url in state_list:
-                    logger.info("Scraping districts for state: %s", state)
+                    logger.info(f"Scraping districts for state: {state}")
                     try:
                         district_table = scraper.get_districts(state, url)
                     except RetryError as re:
-                        logger.error("Retry attempts failed for get_districts for state %s: %s", state, re)
+                        logger.error(f"Retry attempts failed for get_districts for state {state}: {re}")
                         district_table = pd.DataFrame()
                     except Exception as e:
-                        logger.error("Unexpected error during get_districts for state %s: %s", state, e)
+                        logger.error(f"Unexpected error during get_districts for state {state}: {e}")
                         district_table = pd.DataFrame()
                     
+                    # Save all_districts to postgres if not empty
                     if not district_table.empty:
-                        all_districts = pd.concat([all_districts, district_table], ignore_index=True)
-                        logger.info("Scraped %d districts for state %s.", len(district_table), state)
+                        logger.info(f"Scraped {len(district_table)} districts for state {state}.")
+                        logger.info("Saving new district tables to postgres...")
+                        try:
+                            district_table.to_sql("districts", engine, if_exists='append', index=False)
+                            session.commit()
+                            logger.info("District table saved to postgres successfully.")
+                        except Exception as e:
+                            logger.error(f"Error saving district table to postgres : {e}")                        
                     else:
-                        logger.warning("No districts scraped for state %s.", state)
-                
-                # Save all_districts to Excel if not empty
-                if len(all_districts) > starting_length_districts:
-                    try:
-                        logger.info("Saving new district tables to Excel...")
-                        with pd.ExcelWriter(EXCEL_FILE, mode='a', if_sheet_exists='replace', engine='openpyxl') as writer:
-                            all_districts.to_excel(writer, sheet_name=SHEET_NAMES[1], index=False)
-                        logger.info("District table saved successfully.")
-                    except Exception as e:
-                        logger.error("Error saving district table to Excel: %s", e)
-                else:
-                    logger.warning("No new district data scraped. Skipping saving.")
+                        logger.warning(f"No districts scraped for state {state}. Skipping saving.")
             except Exception as e:
-                logger.error("Error during district scraping: %s", e)
+                logger.error(f"Error during district scraping: {e}")
         else:
             logger.warning("No missing states found. Skipping district scraping.")
         
-        # ##### Scrape the BLOCK tables #####
+        ##### Scrape the BLOCK tables #####
+        # Get count of all blocks in the Block table
+        try:
+            all_blocks = session.query(Block)
+            starting_length_blocks = all_blocks.count()
+            logger.info(f"Blocks table queried successfully, count of blocks: {starting_length_blocks}")
+        except Exception as e:
+            logger.error(f"Error querying blocks: {e}")
 
-        # # Load existing blocks from Excel
-        # all_blocks = pd.ExcelFile(EXCEL_FILE).parse(SHEET_NAMES[2])
-        # starting_length_blocks = len(all_blocks)
+        # Get list of available state-district pairs in the Block table
+        try:
+            available_districts = session.query(Block.__table__.c["States/UT's"], Block.__table__.c["District"]).distinct().all() # <class 'sqlalchemy.orm.query.Query'>
+            available_districts = [(district[0], district[1]) for district in available_districts] # Convert to clean list
+            logger.info(f"available distinct districts are:{available_districts[0:10]} ...")
+        except Exception as e:
+            logger.error(f"Error getting unique districts from all_blocks: {e}")
+            available_districts = []
+        logger.info(f"Loaded {starting_length_blocks} blocks from {len(available_districts)} state-district pairs in postgres.")
 
-        # try:
-        #     # Select relevant columns for comparison
-        #     all_blocks_pairs = all_blocks[['States/UT\'s', 'District']]
-        #     unique_state_district_pairs = all_blocks_pairs.drop_duplicates()
-        # except Exception as e:
-        #     logger.error("Error accessing 'States/UT\'s and 'District' columns in all_blocks: %s", e)
-        #     unique_state_district_pairs = pd.DataFrame(columns=["States/UT\'s", "District"])
+        # Find missing state-district pairs by querying the District table
+        try:
+            subquery = session.query(Block.__table__.c["States/UT's"], Block.__table__.c["District"]).distinct().subquery()
+            missing_districts = session.query(District).filter(
+                ~session.query(subquery).filter(
+                    (subquery.c["States/UT's"] == District.__table__.c["States/UT's"]) &
+                    (subquery.c["District"] == District.__table__.c["District"])
+                ).exists()
+            ).all()
+            logger.info(f"no of missing state-district pairs: {len(missing_districts)}")
+        except Exception as e:
+            logger.error(f"Error finding missing state-district pairs: {e}")
+            missing_districts = []
 
-        # logger.info("Loaded %d blocks from %d state-district pairs in Excel.", starting_length_blocks, len(unique_state_district_pairs))
+        if len(missing_districts)>0:
+            try:
+                logger.info("Scraping block tables for missing state-district combinations...")
+                district_list = []
 
-        # # Perform a left merge to identify missing state-district pairs
-        # missing_districts = all_districts.merge(
-        #     unique_state_district_pairs,
-        #     on=["States/UT\'s", "District"],
-        #     how='left',
-        #     indicator=True
-        # )
+                missing_states_names = [getattr(district, "States/UT's") for district in missing_districts]
+                missing_districts_names = [getattr(district, "District") for district in missing_districts]
+                missing_districts_urls = [getattr(district, "URL") for district in missing_districts]
+                district_list = list(zip(missing_states_names, missing_districts_names, missing_districts_urls))
 
-        # # Filter rows that did not find a match in all_blocks
-        # missing_districts = missing_districts[missing_districts['_merge'] == 'left_only']
+                for state, district, url in district_list:
+                    logger.info(f"Scraping blocks for {district} , {state}")
+                    try:
+                        block_table = scraper.get_blocks(state, district, url)
+                    except RetryError as re:
+                        logger.error(f"Retry attempts failed for get_blocks for {district} , {state}: {re}")
+                        block_table = pd.DataFrame()
+                    except Exception as e:
+                        logger.error(f"Unexpected error during get_blocks for {district} , {state}: {e}")
+                        block_table = pd.DataFrame()
+                    
+                    # Save all_blocks to postgres if not empty
+                    if not block_table.empty:
+                        logger.info(f"Scraped {len(block_table)} blocks for {district} , {state}.")
+                        logger.info("Saving new block tables to postgres...")
+                        try:
+                            block_table.to_sql("blocks", engine, if_exists='append', index=False)
+                            session.commit()
+                            logger.info("Block table saved to postgres successfully.")
+                        except Exception as e:
+                            logger.error(f"Error saving block table to postgres : {e}")                        
+                    else:
+                        logger.warning(f"No blocks scraped for {district} , {state}. Skipping saving.")
+            except Exception as e:
+                logger.error(f"Error during block scraping: {e}")
+        else:
+            logger.warning("No missing state-district pairs found. Skipping block scraping.")
 
-        # # Drop the merge indicator column
-        # missing_districts = missing_districts.drop(columns=['_merge'])
+        ##### Scrape the PANCHAYAT tables #####
+        # Get count of all panchayats in the Panchayat table
+        try:
+            all_panchayats = session.query(Panchayat)
+            starting_length_panchayats = all_panchayats.count()
+            logger.info(f"Panchayats table queried successfully, count of panchayats: {starting_length_panchayats}")
+        except Exception as e:
+            logger.error(f"Error querying panchayats: {e}")
 
-        # logger.info("Found %d missing state-district combinations.", len(missing_districts))
+        # Get list of available state-district-block pairs in the Panchayat table
+        try:
+            available_blocks = session.query(Panchayat.__table__.c["States/UT's"], Panchayat.__table__.c["District"], Panchayat.__table__.c["Block"]).distinct().all() # <class 'sqlalchemy.orm.query.Query'>
+            available_blocks = [(block[0], block[1], block[2]) for block in available_blocks] # Convert to clean list
+            logger.info(f"available distinct blocks are:{available_blocks[0:10]} ...")
+        except Exception as e:
+            logger.error(f"Error getting unique blocks from all_panchayats: {e}")
+            available_blocks = []
+        logger.info(f"Loaded {starting_length_panchayats} panchayats from {len(available_blocks)} state-district-block pairs in postgres.")
 
-        # if not missing_districts.empty:
-        #     try:
-        #         logger.info("Scraping block tables for missing  state-district combinations...")
-        #         # Create a list of tuples: (State/UT\'s, District, URL)
-        #         district_list = list(zip(
-        #             missing_districts["States/UT\'s"],
-        #             missing_districts["District"],
-        #             missing_districts['URL']
-        #         ))
+        # Find missing state-district-block pairs by querying the Block table
+        try:
+            subquery = session.query(Panchayat.__table__.c["States/UT's"], Panchayat.__table__.c["District"], Panchayat.__table__.c["Block"]).distinct().subquery()
+            missing_panchayats = session.query(Block).filter(
+                ~session.query(subquery).filter(
+                    (subquery.c["States/UT's"] == Block.__table__.c["States/UT's"]) &
+                    (subquery.c["District"] == Block.__table__.c["District"]) &
+                    (subquery.c["Block"] == Block.__table__.c["Block"])
+                ).exists()
+            ).all()
+            logger.info(f"no of missing state-district-block pairs: {len(missing_panchayats)}")
+        except Exception as e:
+            logger.error(f"Error finding missing state-district-block pairs: {e}")
+            missing_panchayats = []
 
-        #         for state, district, url in district_list:
-        #             logger.info("Scraping data for %s , %s", district, state)
-        #             try:
-        #                 block_table = scraper.get_blocks(state, district, url)
-        #             except RetryError as re:
-        #                 logger.error("Retry attempts failed for get_blocks for %s , %s : %s", district, state, re)
-        #                 block_table = pd.DataFrame()
-        #             except Exception as e:
-        #                 logger.error("Unexpected error during get_blocks for %s , %s : %s", district, state, e)
-        #                 block_table = pd.DataFrame()
+        if len(missing_panchayats)>0:
+            try:
+                logger.info("Scraping panchayat tables for missing state-district-block combinations...")
+                block_list = []
 
-        #             if not block_table.empty:
-        #                 all_blocks = pd.concat([all_blocks, block_table], ignore_index=True)
-        #                 logger.info("Scraped %d records for %s , %s", len(block_table), district, state)
-        #             else:
-        #                 logger.warning("No data scraped for %s , %s ", district, state)
+                missing_states_names = [getattr(panchayat, "States/UT's") for panchayat in missing_panchayats]
+                missing_districts_names = [getattr(panchayat, "District") for panchayat in missing_panchayats]
+                missing_blocks_names = [getattr(panchayat, "Block") for panchayat in missing_panchayats]
+                missing_blocks_urls = [getattr(panchayat, "URL") for panchayat in missing_panchayats]
+                block_list = list(zip(missing_states_names, missing_districts_names, missing_blocks_names, missing_blocks_urls))
 
-        #         # Save all_blocks to Excel if new data was added
-        #         if len(all_blocks) > starting_length_blocks:
-        #             try:
-        #                 logger.info("Saving new block data to Excel...")
-        #                 with pd.ExcelWriter(EXCEL_FILE, mode='a', if_sheet_exists='replace', engine='openpyxl') as writer:
-        #                     all_blocks.to_excel(writer, sheet_name=SHEET_NAMES[2], index=False)
-        #                 logger.info("Block data saved successfully.")
-        #             except Exception as e:
-        #                 logger.error("Error saving block data to Excel: %s", e)
-        #         else:
-        #             logger.warning("No new block data scraped. Skipping saving.")
-        #     except Exception as e:
-        #         logger.error("Error during block scraping: %s", e)
-        # else:
-        #     logger.warning("No missing districts found. Skipping block scraping.")
-
-        # ##### Scrape the PANCHAYAT tables #####
-
-        # # Load existing panchayats from Excel
-        # all_panchayats = pd.ExcelFile(EXCEL_FILE).parse(SHEET_NAMES[3])
-        # starting_length_panchayats = len(all_panchayats)
-
-        # # If missing states-district-block pairs are found, scrape
-        # try:
-        #     # Select relevant columns for comparison
-        #     all_panchayat_pairs = all_panchayats[['States/UT\'s', 'District', 'Block']]
-        #     unique_state_district_block_pairs = all_panchayat_pairs.drop_duplicates()
-        # except Exception as e:
-        #     logger.error("Error accessing 'States/UT\'s', 'District' and 'Block' columns in all_blocks: %s", e)
-        #     unique_state_district_block_pairs = pd.DataFrame(columns=["States/UT\'s", "District", "Block"])
-
-        # logger.info("Loaded %d panchayats from %d state-district-block pairs in Excel.", 
-        #             starting_length_panchayats, 
-        #             len(unique_state_district_block_pairs))
-
-
-        # # Perform a left merge to identify missing state-district pairs
-        # missing_blocks = all_blocks.merge(
-        #     unique_state_district_block_pairs,
-        #     on=["States/UT\'s", "District","Block"],
-        #     how='left',
-        #     indicator=True
-        # )
-
-        # # Filter rows that did not find a match in all_blocks
-        # missing_blocks = missing_blocks[missing_blocks['_merge'] == 'left_only']
-
-        # # Drop the merge indicator column
-        # missing_blocks = missing_blocks.drop(columns=['_merge'])
-        
-        # # Create state-district pairs using missing_blocks to loop through.
-        # # Select relevant columns for comparison
-
-        # if not missing_blocks.empty:
-        #     missing_blocks_pairs = missing_blocks[['States/UT\'s', 'District']]
-        #     unique_missing_block_pairs = missing_blocks_pairs.drop_duplicates()
-        #     logger.info("Found %d missing state-district-block combinations representing %d unique state-district pairs.",
-        #                  len(missing_blocks_pairs),
-        #                  len(unique_missing_block_pairs))
-
-        #     # loop through first two rows of unique_missing_block_pairs
-        #     for index, row in unique_missing_block_pairs.iterrows():
-        #         state = row['States/UT\'s']
-        #         district = row['District']
-        #         logger.info("--------------------------------------------------")
-        #         logger.info("Scraping panchayat data for %s , %s", district, state)
-        #         blocks = missing_blocks.loc[(missing_blocks['States/UT\'s'] == state) & (missing_blocks['District'] == district), 'Block']
-        #         url = missing_blocks.loc[(missing_blocks['States/UT\'s'] == state) & (missing_blocks['District'] == district), 'URL']
-        #         logger.info("No of blocks: %d", len(blocks))
-        #         logger.info("--------------------------------------------------")
-
-        #         for block, url in zip(blocks, url):
-        #             update_status("Running")
-        #             try:
-        #                 panchayat_table = scraper.get_panchayats(state, district, block, url)
-        #             except RetryError as re:
-        #                 logger.error("Retry attempts failed for get_panchayats for %s , %s , %s : %s", block, district, state, re)
-        #                 panchayat_table = pd.DataFrame()
-
-        #             except Exception as e:
-        #                 logger.error("Unexpected error during get_panchayats for %s , %s , %s : %s", block, district, state, e)
-        #                 panchayat_table = pd.DataFrame()
-
-        #             if not panchayat_table.empty:
-        #                 all_panchayats = pd.concat([all_panchayats, panchayat_table], ignore_index=True)
-        #                 logger.info("Scraped %d records for %s , %s , %s and added to all_panchayats df", len(panchayat_table), block, district, state)
-        #             else:
-        #                 logger.warning("No data scraped for %s , %s , %s ", block, district, state)
-
-        #         # Save all_panchayats to Excel if new data was added
-        #         if len(all_panchayats) > starting_length_panchayats:
-        #             try:
-        #                 logger.info(f"Saving new panchayat data of {state} , {district} to Excel...")
-        #                 with pd.ExcelWriter(EXCEL_FILE, mode='a', if_sheet_exists='replace', engine='openpyxl') as writer:
-        #                     all_panchayats.to_excel(writer, sheet_name=SHEET_NAMES[3], index=False)
-        #                 logger.info(f"Panchayat data of {state} , {district} saved successfully.")
+                for state, district, block, url in block_list:
+                    logger.info(f"Scraping panchayats for {block} , {district} , {state}")
+                    try:
+                        panchayat_table = scraper.get_panchayats(state, district, block, url)
+                    except RetryError as re:
+                        logger.error(f"Retry attempts failed for get_panchayats for {block} , {district} , {state}: {re}")
+                        panchayat_table = pd.DataFrame()
+                    except Exception as e:
+                        logger.error(f"Unexpected error during get_panchayats for {block} , {district} , {state}: {e}")
+                        panchayat_table = pd.DataFrame()
+                    
+                    # Save all_panchayats to postgres if not empty
+                    if not panchayat_table.empty:
+                        logger.info(f"Scraped {len(panchayat_table)} panchayats for {block} , {district} , {state}.")
                         
-        #             except Exception as e:
-        #                 logger.error(f"Error saving panchayat data of {state} , {district} to Excel: {e}")
-        #         else:
-        #             logger.warning("No new panchayat data scraped for {state} , {district}. Skipping saving.")
-        # else:
-        #     logger.warning("No missing blocks found. Skipping panchayat scraping.")
+                        # Convert empty strings in numeric columns to NaN, then fill NaN with None
+                        logger.info("Converting empty strings to NaN>None in numeric columns...")
+                        numeric_columns = ["Well Diameter(In Feet)", "Pre Monsoon Water Level(In Feet)", "Pre Monsoon Latitude", "Pre Monsoon Longitude"]
+                        for column in numeric_columns:
+                            panchayat_table[column] = pd.to_numeric(panchayat_table[column], errors='coerce')
+                            panchayat_table[column].fillna(None, inplace=True)    # SINCE POSTGRES DOESN'T ALLOW NaN VALUES IN INTEGER COLUMNS
+
+                        logger.info("Saving new panchayat tables to postgres...")
+                        try:
+                            panchayat_table.to_sql("panchayats", engine, if_exists='append', index=False)
+                            session.commit()
+                            logger.info("Panchayat table saved to postgres successfully.")
+                        except Exception as e:
+                            logger.error(f"Error saving panchayat table to postgres : {e}")                        
+                    else:
+                        logger.warning(f"No panchayats scraped for {block} , {district} , {state}. Skipping saving.")
+            except Exception as e:
+                logger.error(f"Error during panchayat scraping: {e}")
+        else:
+            logger.warning("No missing state-district-block pairs found. Skipping panchayat scraping.")
     
     except Exception as e:
         logger.error("Error during MAIN scraping process: %s", e)

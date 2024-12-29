@@ -192,7 +192,7 @@ def get_db_connection():
 
 def get_db_session():
     DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-    engine = create_engine(DATABASE_URL)
+    engine = create_engine(DATABASE_URL,echo=False)
     
     # Create tables if they don't exist
     Base.metadata.create_all(engine)
