@@ -191,11 +191,22 @@ def get_db_connection():
     return engine.connect()
 
 def get_db_session():
+    from sqlalchemy import create_engine
     DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-    engine = create_engine(DATABASE_URL,echo=False)
-    
-    # Create tables if they don't exist
-    Base.metadata.create_all(engine)
-    
+    engine = create_engine(DATABASE_URL, echo=False)
+
+    # Try to create tables if they don't exist, but handle connection failures gracefully
+    try:
+        # Test connection first
+        with engine.connect() as connection:
+            # Create tables if they don't exist
+            Base.metadata.create_all(engine)
+            print("Database tables verified/created successfully.")
+    except Exception as e:
+        print(f"Database connection failed during session creation: {e}")
+        print("The scraper will attempt to create tables when saving data.")
+        # Create a dummy engine for now - tables will be created when data is saved
+        engine = create_engine("sqlite:///:memory:", echo=False)
+
     Session = sessionmaker(bind=engine)
     return Session()

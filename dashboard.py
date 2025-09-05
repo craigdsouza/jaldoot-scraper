@@ -1,165 +1,188 @@
-# dashboard.py
-
-import streamlit as st
-import json
-from pathlib import Path
-import time
-from config.settings import STATUS_FILE, EXCEL_FILE, LOG_FILE  # Import LOG_FILE
-from modules.utils import count_records, get_expected_counts
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+import streamlit as st
+from sqlalchemy import text, create_engine
+from config.settings import DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
 
-def load_status():
-    """Load the scraper status from status.json."""
-    if STATUS_FILE.exists():
-        try:
-            with open(STATUS_FILE, "r") as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            return {"status": "Error", "message": "Invalid JSON format."}
-        except Exception as e:
-            return {"status": "Error", "message": str(e)}
-    else:
-        return {"status": "Unknown", "message": "status.json not found."}
 
-def display_status(status_data):
-    """Display the scraper status based on the loaded data."""
-    status = status_data.get("status", "Unknown")
-    message = status_data.get("message", "")
+@st.cache_resource
+def get_engine():
+    database_url = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    engine = create_engine(database_url)
+    return engine
 
-    if status == "Running":
-        st.success("🟢 Scraper is **Running**.")
-    elif status == "Stopped":
-        st.success("🟢 Scraper has **Stopped** successfully.")
-    elif status == "Error":
-        st.error(f"🔴 Scraper encountered an **Error**: {message}")
-    else:
-        st.warning("⚪ Scraper status is **Unknown**.")
 
-    # Display the last updated time
-    st.write(f"**Last Updated:** {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}")
+@st.cache_data(ttl=300)
+def load_districts() -> list[str]:
+    engine = get_engine()
+    query = text(
+        """
+        SELECT DISTINCT district
+        FROM public.panchayats
+        WHERE district IS NOT NULL AND district <> ''
+        ORDER BY district
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(query).fetchall()
+    return [r[0] for r in rows]
 
-def load_counts(excel_file: Path):
-    """Load expected and actual counts for each state."""
-    expected_counts = get_expected_counts()
-    actual_counts = count_records()
-    
-    if expected_counts.empty or actual_counts.empty:
-        st.error("Unable to load counts data.")
-        return pd.DataFrame()
-    
-    # Merge on "States/UT's"
-    merged_counts = pd.merge(expected_counts, actual_counts, on="States/UT's", how="left")
-    merged_counts['Actual_Records'] = merged_counts['Actual_Records'].fillna(0).astype(int)
-    
-    return merged_counts
 
-def plot_counts(merged_counts: pd.DataFrame):
-    """Plot expected vs actual records per state."""
+@st.cache_data(ttl=300)
+def load_blocks(district: str) -> list[str]:
+    engine = get_engine()
+    query = text(
+        """
+        SELECT DISTINCT block
+        FROM public.panchayats
+        WHERE district = :district AND block IS NOT NULL AND block <> ''
+        ORDER BY block
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"district": district}).fetchall()
+    return [r[0] for r in rows]
+
+
+@st.cache_data(ttl=300)
+def load_panchayats(district: str, block: str) -> list[str]:
+    engine = get_engine()
+    query = text(
+        """
+        SELECT DISTINCT panchayat
+        FROM public.panchayats
+        WHERE district = :district AND block = :block AND panchayat IS NOT NULL AND panchayat <> ''
+        ORDER BY panchayat
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"district": district, "block": block}).fetchall()
+    return [r[0] for r in rows]
+
+
+@st.cache_data(ttl=300)
+def load_villages(district: str, block: str, panchayat: str) -> list[str]:
+    engine = get_engine()
+    query = text(
+        """
+        SELECT DISTINCT village
+        FROM public.panchayats
+        WHERE district = :district AND block = :block AND panchayat = :panchayat AND village IS NOT NULL AND village <> ''
+        ORDER BY village
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"district": district, "block": block, "panchayat": panchayat}).fetchall()
+    return [r[0] for r in rows]
+
+
+@st.cache_data(ttl=300)
+def load_well_ids(district: str, block: str, panchayat: str, village: str) -> list[str]:
+    engine = get_engine()
+    query = text(
+        """
+        SELECT DISTINCT well_id
+        FROM public.panchayats
+        WHERE district = :district AND block = :block AND panchayat = :panchayat AND village = :village
+          AND well_id IS NOT NULL AND well_id <> ''
+        ORDER BY well_id
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"district": district, "block": block, "panchayat": panchayat, "village": village}).fetchall()
+    return [r[0] for r in rows]
+
+
+def season_year_to_date(season: str, year: str) -> pd.Timestamp | None:
+    if not season or not year or not str(year).isdigit():
+        return None
+    season_lower = season.strip().lower()
+    month_day = "05-01" if season_lower.startswith("pre") else "11-01"
     try:
-        # Set the figure size
-        plt.figure(figsize=(12, 8))
-        
-        # Create a bar plot for Expected Records
-        sns.barplot(
-            data=merged_counts,
-            x="States/UT's",
-            y="Expected_Records",
-            color='blue',
-            label='Expected Records'
-        )
-        
-        # Overlay Actual Records
-        sns.barplot(
-            data=merged_counts,
-            x="States/UT's",
-            y="Actual_Records",
-            color='green',
-            label='Actual Records'
-        )
-        
-        # Rotate x-axis labels for better readability
-        plt.xticks(rotation=45, ha='right')
-        
-        # Add labels and title
-        plt.xlabel("States/UT's")
-        plt.ylabel("Number of Records")
-        plt.title("Expected vs Actual Panchayat Records per State")
-        plt.legend()
-        
-        # Adjust layout
-        plt.tight_layout()
-        
-        # Display the plot in Streamlit
-        st.pyplot(plt)
-        
-        # Clear the current figure
-        plt.clf()
-        
-    except Exception as e:
-        st.error(f"Error plotting counts: {e}")
+        return pd.to_datetime(f"{int(year):04d}-{month_day}")
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=300)
+def load_timeseries_for_well(well_id: str, district: str, block: str, panchayat: str, village: str) -> pd.DataFrame:
+    engine = get_engine()
+    query = text(
+        """
+        SELECT season, year, water_level_ft, water_level_mts
+        FROM public.well_measurements
+        WHERE well_id = :well_id AND district = :district AND block = :block AND panchayat = :panchayat AND village = :village
+        ORDER BY year::int NULLS LAST, season
+        """
+    )
+    with engine.connect() as conn:
+        df = pd.read_sql(query, conn, params={"well_id": well_id, "district": district, "block": block, "panchayat": panchayat, "village": village})
+
+    if df.empty:
+        return df
+
+    # Construct a date column from season/year and coerce the series to numeric
+    df["date"] = [season_year_to_date(s, y) for s, y in zip(df["season"], df["year"])]
+    df["water_level_ft"] = pd.to_numeric(df["water_level_ft"], errors="coerce")
+    df["water_level_mts"] = pd.to_numeric(df["water_level_mts"], errors="coerce")
+    df = df.dropna(subset=["date"]).sort_values("date")
+    return df
+
 
 def main():
-    st.title("🛠️ Scraper Status Dashboard")
+    st.set_page_config(page_title="Jaldoot Dashboard", layout="wide")
+    st.title("Well Water Levels Dashboard")
 
-    # Load the current status
-    status_data = load_status()
+    # Sidebar selectors
+    st.sidebar.header("Filters")
+    districts = load_districts()
+    district = st.sidebar.selectbox("District", options=districts, index=0) if districts else None
 
-    # Display the status
-    display_status(status_data)
+    blocks = load_blocks(district) if district else []
+    block = st.sidebar.selectbox("Block", options=blocks) if blocks else None
 
-    # Add a refresh button
-    if st.button("Refresh"):
-        st.rerun()
+    panchayats = load_panchayats(district, block) if (district and block) else []
+    panchayat = st.sidebar.selectbox("Panchayat", options=panchayats) if panchayats else None
 
-    st.markdown("---")  # Separator
+    villages = load_villages(district, block, panchayat) if (district and block and panchayat) else []
+    village = st.sidebar.selectbox("Village", options=villages) if villages else None
 
-    st.header("📊 Records Status Chart")
-    
-    # Load counts data
-    counts_df = load_counts(EXCEL_FILE)
-    
-    if not counts_df.empty:
-        # Display the DataFrame (optional)
-        st.dataframe(counts_df)
-        
-        # Plot the chart
-        plot_counts(counts_df)
-    else:
-        st.warning("Counts data is unavailable.")
-    
-    st.markdown("---")  # Separator for the log file download section
+    well_ids = load_well_ids(district, block, panchayat, village) if (district and block and panchayat and village) else []
+    well_id = st.sidebar.selectbox("Well ID", options=well_ids) if well_ids else None
 
-    st.header("📥 Download Logs")
+    if not district:
+        st.info("Select a district to begin.")
+        return
 
-    if LOG_FILE.exists():
-        with open(LOG_FILE, "rb") as log_file:
-            log_data = log_file.read()
-        st.download_button(
-            label="Download Latest Log File",
-            data=log_data,
-            file_name="jaldoot.log",
-            mime="text/plain"
-        )
-    else:
-        st.warning("Log file not found.")
+    if not (block and panchayat and village and well_id):
+        st.info("Select Block, Panchayat, Village, and Well ID to view the time series.")
+        return
 
-    st.markdown("---")  # Separator for the data download section
+    df = load_timeseries_for_well(well_id, district, block, panchayat, village)
+    if df.empty:
+        st.warning("No measurements found for the selected Well ID.")
+        return
 
-    st.header("📥 Download Data")
+    st.subheader(f"Well ID: {well_id}")
+    st.caption("Both feet and meters series are shown; points may be missing if not reported in that unit.")
 
-    if EXCEL_FILE.exists():
-        with open(EXCEL_FILE, "rb") as excel_file:
-            excel_data = excel_file.read()
-        st.download_button(
-            label="Download Latest Data File",
-            data=excel_data,
-            file_name="jaldoot-remote.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    else:
-        st.warning("Data file not found.")
+    # Prepare and plot
+    plot_df = df.set_index("date")[
+        ["water_level_ft", "water_level_mts"]
+    ]
+
+    # Rename for nicer legend labels
+    plot_df = plot_df.rename(columns={
+        "water_level_ft": "Water Level (ft)",
+        "water_level_mts": "Water Level (m)",
+    })
+
+    st.line_chart(plot_df)
+
+    with st.expander("Show raw data"):
+        st.dataframe(df.sort_values("date"), use_container_width=True)
+
 
 if __name__ == "__main__":
     main()
+
+

@@ -5,16 +5,16 @@ import os
 import logging
 from dotenv import load_dotenv
 
+# Load environment variables from .env file BEFORE reading any env-dependent settings
+BASE_DIR = Path(__file__).resolve().parent.parent  # Root directory
+ENV_FILE = BASE_DIR / '.env'
+load_dotenv(dotenv_path=ENV_FILE)
+
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", 5432)
 DB_NAME = os.getenv("DB_NAME", "postgres")
 DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-
-# Load environment variables from .env file
-BASE_DIR = Path(__file__).resolve().parent.parent  # Root directory
-ENV_FILE = BASE_DIR / '.env'
-load_dotenv(dotenv_path=ENV_FILE)
 
 # Load configurations from environment variables with defaults
 CHROME_DRIVER_PATH = Path(os.getenv("CHROME_DRIVER_PATH", "chromedriver.exe"))
@@ -23,7 +23,28 @@ HEADLESS = os.getenv("HEADLESS", "True") == "True"
 TABLE_ID = os.getenv("TABLE_ID", "default_table_id")
 EXCEL_FILE = BASE_DIR / os.getenv("EXCEL_FILE_PATH", "data/jaldoot.xlsx")
 LOG_FILE = BASE_DIR / os.getenv("LOG_FILE", "logs/jaldoot.log")
-BASE_URL = os.getenv("BASE_URL", "http://defaulturl.com")
+# Season-to-URL mapping for automatic URL selection
+SEASON_URLS = {
+    "post-monsoon-2022": "https://mnregaweb4.nic.in/Jaldootweb/ReportABA/WaterCoveredReport.aspx",
+    "pre-monsoon-2023": "https://mnregaweb4.nic.in/Jaldootweb/ReportABA/WaterLevelReport2023.aspx",
+    "post-monsoon-2023": "https://mnregaweb4.nic.in/Jaldootweb/ReportABA/WellCoveredReport.aspx",
+    "pre-monsoon-2024": "https://mnregaweb4.nic.in/Jaldootweb/ReportABA/WellCoveredReportPre_2024.aspx",
+    "post-monsoon-2024": "https://mnregaweb4.nic.in/Jaldootweb/ReportABA/WellCoveredReportPost_2024.aspx",
+    "pre-monsoon-2025": "https://mnregaweb4.nic.in/Jaldootweb/ReportABA/WellCoveredReportPre_2025.aspx",
+}
+
+SEASON = os.getenv("SEASON", "unknown-season")  # Track data collection season
+
+# Automatic URL selection based on season, or manual override
+AUTO_URL = os.getenv("AUTO_URL", "true").lower() == "true"
+if AUTO_URL and SEASON in SEASON_URLS:
+    BASE_URL = SEASON_URLS[SEASON]
+    print(f"🔗 Auto-selected URL for {SEASON}: {BASE_URL}")
+else:
+    BASE_URL = os.getenv("BASE_URL", "http://defaulturl.com")
+    print(f"🔗 Using manual URL: {BASE_URL}")
+
+TEST_MODE = os.getenv("TEST_MODE", "False")  # Stop after states for testing
 
 # Define sheet names
 SHEET_NAMES = os.getenv("SHEET_NAMES", "states,districts,blocks,panchayats").split(',')
