@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+import altair as alt
 from sqlalchemy import text, create_engine
 from config.settings import DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
 
@@ -165,18 +166,27 @@ def main():
     st.subheader(f"Well ID: {well_id}")
     st.caption("Both feet and meters series are shown; points may be missing if not reported in that unit.")
 
-    # Prepare and plot
-    plot_df = df.set_index("date")[
-        ["water_level_ft", "water_level_mts"]
-    ]
-
-    # Rename for nicer legend labels
-    plot_df = plot_df.rename(columns={
+    # Prepare tidy data for Altair and invert Y-axis (depth increases downward)
+    tidy = df[["date", "water_level_ft", "water_level_mts"]].copy()
+    tidy = tidy.melt(id_vars=["date"], var_name="series", value_name="value")
+    tidy["series"] = tidy["series"].map({
         "water_level_ft": "Water Level (ft)",
         "water_level_mts": "Water Level (m)",
     })
 
-    st.line_chart(plot_df)
+    chart = (
+        alt.Chart(tidy)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("date:T", title="Date"),
+            y=alt.Y("value:Q", title="Water Level", scale=alt.Scale(reverse=True)),
+            color=alt.Color("series:N", title="Series"),
+            tooltip=["date:T", "series:N", alt.Tooltip("value:Q", format=".2f")],
+        )
+        .properties(height=400)
+    )
+
+    st.altair_chart(chart, use_container_width=True)
 
     with st.expander("Show raw data"):
         st.dataframe(df.sort_values("date"), use_container_width=True)
